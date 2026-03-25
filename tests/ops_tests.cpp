@@ -3,11 +3,14 @@
 // Required for using M_PI_2 in MSVC.
 #define _USE_MATH_DEFINES
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <numeric>
 
 #include "doctest/doctest.h"
 
 #include "mlx/backend/cuda/cuda.h"
+#include "mlx/backend/metal/kernels/steel/conv/params.h"
 #include "mlx/mlx.h"
 
 using namespace mlx::core;
@@ -4027,6 +4030,32 @@ TEST_CASE("test conv2d") {
     auto out = conv2d(in, wt, stride, padding, /* dilation= */ {1, 1}, groups);
     CHECK(allclose(out, expected).item<bool>());
   }
+}
+
+TEST_CASE("test conv2d output offset uses 64-bit arithmetic") {
+  // Mirror a realistic 2D conv layout where per-batch output has 64*64*17
+  // elements and the last batch offset is past signed int32 range.
+  MLXConvParams<2> params{};
+  params.out_strides[0] = 64 * 64 * 17;
+  params.out_strides[1] = 64 * 17;
+  params.out_strides[2] = 17;
+
+  auto per_batch = params.out_strides[0];
+  int n = (std::numeric_limits<int32_t>::max() / per_batch) + 2;
+  int oh = 63;
+  int ow = 63;
+
+  auto offset = mlx::steel::conv2d_output_offset(params, n - 1, oh, ow);
+  auto expected = static_cast<size_t>(n - 1) * params.out_strides[0] +
+      static_cast<size_t>(oh) * params.out_strides[1] +
+      static_cast<size_t>(ow) * params.out_strides[2];
+
+  CHECK_EQ(offset, expected);
+  CHECK_GT(offset, static_cast<size_t>(std::numeric_limits<int32_t>::max()));
+
+  // This is the old behavior in the kernel before the fix.
+  auto wrapped = static_cast<int32_t>(expected);
+  CHECK_NE(static_cast<size_t>(wrapped), expected);
 }
 
 TEST_CASE("test trace") {

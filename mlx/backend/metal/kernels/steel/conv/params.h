@@ -48,6 +48,13 @@ struct MLXConvParams {
 namespace mlx {
 namespace steel {
 
+inline size_t
+conv2d_output_offset(const MLXConvParams<2>& params, int n, int oh, int ow) {
+  return static_cast<size_t>(n) * static_cast<size_t>(params.out_strides[0]) +
+      static_cast<size_t>(oh) * static_cast<size_t>(params.out_strides[1]) +
+      static_cast<size_t>(ow) * static_cast<size_t>(params.out_strides[2]);
+}
+
 struct ImplicitGemmConv2DParams {
   const int M;
   const int N;
