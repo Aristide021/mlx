@@ -15,6 +15,8 @@ bool is_available() {
 
 void start_capture(std::string) {}
 void stop_capture() {}
+void retain_library(const mlx::core::Device&, const std::string&) {}
+void release_library(const mlx::core::Device&, const std::string&) {}
 
 const std::unordered_map<std::string, std::variant<std::string, size_t>>&
 device_info() {

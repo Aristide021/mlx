@@ -435,6 +435,12 @@ auto gelu_1(const std::vector<array>& inputs) {
   return std::vector<array>{out};
 }
 
+auto gelu_1_copy(const std::vector<array>& inputs) {
+  auto& x = inputs[0];
+  auto out = x * (1.0f + erf(x / M_SQRT2)) / 2.0f;
+  return std::vector<array>{out};
+}
+
 TEST_CASE("test compile gelu") {
   {
     auto cfun = compile(gelu_1);
@@ -683,34 +689,46 @@ TEST_CASE("test fusion kernel reuse") {
 }
 
 TEST_CASE("test fusion library ownership") {
-#ifdef METAL_AVAILABLE
   if (!metal::is_available()) {
     return;
   }
 
-  auto cfun1 = compile(unary_fused_1);
-  auto cfun2 = compile(unary_fused_1_copy);
-  auto x = array(1.0f, float32);
+  struct DeviceGuard {
+    explicit DeviceGuard(Device device) : device(device) {}
+    ~DeviceGuard() {
+      set_default_device(device);
+    }
+    Device device;
+  };
+
+  DeviceGuard guard(default_device());
+  set_default_device(Device::gpu);
+
+  auto cfun1 = compile(gelu_1);
+  auto cfun2 = compile(gelu_1_copy);
+  auto x = full({2}, array({1.0f, 0.5f}), Device::gpu);
 
   auto y1 = cfun1({x})[0];
   auto y2 = cfun2({x})[0];
-  eval(y1);
-  eval(y2);
-
   auto p1 = std::dynamic_pointer_cast<Compiled>(y1.primitive_ptr());
   auto p2 = std::dynamic_pointer_cast<Compiled>(y2.primitive_ptr());
   REQUIRE(p1);
   REQUIRE(p2);
   CHECK_EQ(p1->lib_name(), p2->lib_name());
+  eval(y1);
+  eval(y2);
 
-  detail::compile_erase(reinterpret_cast<std::uintptr_t>(unary_fused_1));
-  auto y2_after = cfun2({x})[0];
-  CHECK(array_equal(y2_after, y2).item<bool>());
+  detail::compile_erase(reinterpret_cast<std::uintptr_t>(gelu_1));
+  auto x_after = full({3}, array({1.0f, -2.0f, 3.0f}), Device::gpu);
+  auto y2_after = cfun2({x_after})[0];
+  auto expected_after = gelu_1_copy({x_after})[0];
+  CHECK(allclose(y2_after, expected_after).item<bool>());
 
-  detail::compile_erase(reinterpret_cast<std::uintptr_t>(unary_fused_1_copy));
-  auto y1_recompiled = cfun1({x})[0];
-  CHECK(array_equal(y1_recompiled, y1).item<bool>());
-#endif
+  detail::compile_erase(reinterpret_cast<std::uintptr_t>(gelu_1_copy));
+  auto x_recompiled = full({2}, array({-4.0f, 5.0f}), Device::gpu);
+  auto y1_recompiled = cfun1({x_recompiled})[0];
+  auto expected_recompiled = gelu_1({x_recompiled})[0];
+  CHECK(allclose(y1_recompiled, expected_recompiled).item<bool>());
 }
 
 auto add3(const std::vector<array>& xs) {

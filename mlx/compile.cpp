@@ -3,13 +3,13 @@
 #include <atomic>
 #include <cstdlib>
 #include <map>
-#include <mutex>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "mlx/allocator.h"
 #include "mlx/backend/common/compiled.h"
+#include "mlx/backend/metal/metal.h"
 #include "mlx/compile.h"
 #include "mlx/compile_impl.h"
 #include "mlx/fast_primitives.h"
@@ -23,84 +23,6 @@ namespace mlx::core {
 
 constexpr int max_compile_depth = 11;
 constexpr int max_compile_arrays = 24;
-
-namespace {
-
-#ifdef METAL_AVAILABLE
-class MetalLibraryOwnership {
- public:
-  static MetalLibraryOwnership& instance() {
-    static MetalLibraryOwnership ownership;
-    return ownership;
-  }
-
-  void retain(const std::unordered_set<std::string>& lib_names) {
-    if (lib_names.empty()) {
-      return;
-    }
-    std::lock_guard<std::mutex> lock(mtx_);
-    for (const auto& lib_name : lib_names) {
-      refcounts_[lib_name]++;
-    }
-  }
-
-  void release(
-      const Device& device,
-      const std::unordered_set<std::string>& lib_names) {
-    if (device.type != Device::gpu || lib_names.empty()) {
-      return;
-    }
-
-    std::vector<std::string> libraries_to_clear;
-    {
-      std::lock_guard<std::mutex> lock(mtx_);
-      for (const auto& lib_name : lib_names) {
-        auto it = refcounts_.find(lib_name);
-        if (it == refcounts_.end()) {
-          continue;
-        }
-        if (--it->second == 0) {
-          libraries_to_clear.push_back(lib_name);
-          refcounts_.erase(it);
-        }
-      }
-    }
-
-    if (!libraries_to_clear.empty()) {
-      auto& d = metal::device(device);
-      for (const auto& lib_name : libraries_to_clear) {
-        d.clear_library(lib_name);
-      }
-    }
-  }
-
- private:
-  std::mutex mtx_;
-  std::unordered_map<std::string, size_t> refcounts_;
-};
-#endif
-
-void retain_metal_libraries(
-    const Device& device,
-    const std::unordered_set<std::string>& lib_names) {
-#ifdef METAL_AVAILABLE
-  if (device.type == Device::gpu && !lib_names.empty()) {
-    MetalLibraryOwnership::instance().retain(lib_names);
-  }
-#endif
-}
-
-void release_metal_libraries(
-    const Device& device,
-    const std::unordered_set<std::string>& lib_names) {
-#ifdef METAL_AVAILABLE
-  if (device.type == Device::gpu && !lib_names.empty()) {
-    MetalLibraryOwnership::instance().release(device, lib_names);
-  }
-#endif
-}
-
-} // namespace
 
 bool is_unary(const Primitive& p) {
   return (
@@ -464,8 +386,10 @@ class CompilerCache {
 
   void cleanup_cache_entries(std::vector<CacheEntry>& entries) {
     for (auto& entry : entries) {
-      release_metal_libraries(entry.stream.device, entry.metal_libs);
-      entry.metal_libs.clear();
+      for (const auto& lib_name : entry.metal_libs) {
+        metal::release_library(entry.stream.device, lib_name);
+      }
+      entry.metal_libs = {};
     }
   }
 
@@ -1249,7 +1173,9 @@ ArrayFnWithExtra compile(
             entry.metal_libs);
       }
 
-      retain_metal_libraries(entry.stream.device, entry.metal_libs);
+      for (const auto& lib_name : entry.metal_libs) {
+        metal::retain_library(entry.stream.device, lib_name);
+      }
     }
 
     // At this point we must have a tape, now replace the placeholders
