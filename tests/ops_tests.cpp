@@ -4033,8 +4033,7 @@ TEST_CASE("test conv2d") {
 }
 
 TEST_CASE("test conv2d output offset uses 64-bit arithmetic") {
-  // Mirror a realistic 2D conv layout where per-batch output has 64*64*17
-  // elements and the last batch offset is past signed int32 range.
+  // Regression: conv_general output offset must stay correct past int32 range.
   MLXConvParams<2> params{};
   params.out_strides[0] = 64 * 64 * 17;
   params.out_strides[1] = 64 * 17;
@@ -4053,7 +4052,7 @@ TEST_CASE("test conv2d output offset uses 64-bit arithmetic") {
   CHECK_EQ(offset, expected);
   CHECK_GT(offset, static_cast<size_t>(std::numeric_limits<int32_t>::max()));
 
-  // This is the old behavior in the kernel before the fix.
+  // Simulates prior int32 wraparound behavior.
   auto wrapped = static_cast<int32_t>(expected);
   CHECK_NE(static_cast<size_t>(wrapped), expected);
 }

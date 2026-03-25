@@ -48,8 +48,16 @@ struct MLXConvParams {
 namespace mlx {
 namespace steel {
 
+#if defined(__METAL_VERSION__)
+inline size_t conv2d_output_offset(
+    const constant MLXConvParams<2>& params,
+    int n,
+    int oh,
+    int ow) {
+#else
 inline size_t
 conv2d_output_offset(const MLXConvParams<2>& params, int n, int oh, int ow) {
+#endif
   return static_cast<size_t>(n) * static_cast<size_t>(params.out_strides[0]) +
       static_cast<size_t>(oh) * static_cast<size_t>(params.out_strides[1]) +
       static_cast<size_t>(ow) * static_cast<size_t>(params.out_strides[2]);
